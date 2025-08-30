@@ -1,7 +1,7 @@
 import React from 'react'
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { useAuth } from '@/shared/providers/AuthProvider'
-import { LayoutDashboard, FileType, History, LogOut, Shield, User, Boxes } from 'lucide-react'
+import { LayoutDashboard, FileType, History, LogOut, Shield, User, Boxes, Users } from 'lucide-react'
 
 export default function StyledAdminLayout() {
   const { logout, roles, isAuthenticated } = useAuth()
@@ -61,7 +61,6 @@ export default function StyledAdminLayout() {
             <span>Document Types</span>
           </Link>
 
-          {/* ✅ New: Batches */}
           <Link
             to="/admin/batches"
             className={`flex items-center px-4 py-3 rounded-xl transition ${
@@ -74,7 +73,19 @@ export default function StyledAdminLayout() {
             <span>Batches</span>
           </Link>
 
-          {/* Restore tab (correct path) */}
+          {/* ✅ Users Access */}
+          <Link
+            to="/admin/users-access"
+            className={`flex items-center px-4 py-3 rounded-xl transition ${
+              isActive('/admin/users-access')
+                ? 'bg-purple-600/20 border border-purple-500/30'
+                : 'hover:bg-gray-700/50'
+            }`}
+          >
+            <Users className="w-5 h-5 mr-3" />
+            <span>Users Access</span>
+          </Link>
+
           <Link
             to="/admin/document-types/restore"
             className={`flex items-center px-4 py-3 rounded-xl transition ${

@@ -1,1182 +1,1081 @@
-import React, { useState, useEffect } from 'react'
-import { 
-  FileText, Eye, CheckCircle, Upload, XCircle, BarChart3, Users, UserX, 
-  Calendar, Download, Archive, Clock, AlertTriangle, Shield, Lock, 
-  Trash2, RefreshCw, Globe, Server, Database, HardDrive, Zap, Award,
-  FileCheck, FilePlus, FileX, User, Search, Filter, TrendingUp, MoreHorizontal,
-  ChevronRight, Activity, FileDown, Printer, Share, Settings
-} from 'lucide-react'
-import { PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, BarChart, Bar, AreaChart, Area } from 'recharts'
+// DMS Admin Dashboard — Full Featured, Single-File, Routerless (Internal State)
+// Tech: React + TypeScript-friendly JSX, TailwindCSS, lucide-react icons, recharts
+// Notes:
+// - No ReactDOM.createRoot or external router (avoids double-mount & invalid hook issues).
+// - Clickable sections (1..6) navigate to detail views using a simple view state machine.
+// - Section 4 (Export Status) opens a dedicated, fully specced layout with left sidebar, tabs, controls, and a job table.
+// - Section 1/2/3 show tiny "live" movement: numbers tick up by 0–2 every few seconds to feel believable.
+// - All strings are single-line or template literals to avoid unterminated string constants in TSX/Babel.
+// - Tooltip styles use valid object literals (no nested quotes mistakes).
+// - Uses lucide-react + recharts.
 
+import React, { useEffect, useMemo, useState } from 'react'
+import {
+  // App shell
+  LayoutDashboard, Search, Settings, RefreshCw,
+  // Section icons
+  Table2, TrendingUp, Users, Activity, Package, FileText, CheckCircle, XCircle,
+  // Misc controls/icons
+  Filter, Calendar, ChevronRight, Download, Upload, Archive, Shield, HardDrive, Database, Zap, Globe, UserMinus, User,
+  // Charts/indicators
+  BarChart3, PieChart as PieChartIcon,
+} from 'lucide-react'
+import {
+  ResponsiveContainer,
+  LineChart, Line,
+  BarChart, Bar,
+  AreaChart, Area,
+  PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend
+} from 'recharts'
+
+/* ---------------------------------------------
+ * Local "Router" — which view to render
+ * ------------------------------------------- */
+const VIEWS = {
+  DASHBOARD: 'DASHBOARD',
+  EXPORT_STATUS: 'EXPORT_STATUS',
+  CURRENT_BATCH: 'CURRENT_BATCH',
+  ACTIVE_USERS: 'ACTIVE_USERS',
+  PRODUCTIVITY: 'PRODUCTIVITY',
+  USER_ACTIVITY: 'USER_ACTIVITY',
+  BATCH_PROCESSING: 'BATCH_PROCESSING',
+} as const
+type ViewKey = typeof VIEWS[keyof typeof VIEWS]
+
+/* ---------------------------------------------
+ * UI Primitives
+ * ------------------------------------------- */
+const Card: React.FC<{ className?: string; children: React.ReactNode }> = ({ className = '', children }) => (
+  <div className={`rounded-2xl border border-white/10 bg-white/5 shadow-sm ${className}`}>{children}</div>
+)
+const CardHeader: React.FC<{ className?: string; children: React.ReactNode }> = ({ className = '', children }) => (
+  <div className={`p-4 border-b border-white/10 ${className}`}>{children}</div>
+)
+const CardTitle: React.FC<{ className?: string; children: React.ReactNode }> = ({ className = '', children }) => (
+  <h3 className={`font-semibold text-white ${className}`}>{children}</h3>
+)
+const CardContent: React.FC<{ className?: string; children: React.ReactNode }> = ({ className = '', children }) => (
+  <div className={`p-4 ${className}`}>{children}</div>
+)
+const Button: React.FC<{
+  className?: string
+  onClick?: () => void
+  children: React.ReactNode
+  variant?: 'default' | 'outline' | 'ghost'
+  size?: 'sm' | 'md' | 'lg'
+  type?: 'button' | 'submit' | 'reset'
+}> = ({ className = '', onClick, children, variant = 'default', size = 'md', type = 'button' }) => {
+  const v = {
+    default: 'bg-white/10 hover:bg-white/20 border border-white/20 text-white',
+    outline: 'bg-transparent hover:bg-white/10 border border-white/20 text-white',
+    ghost: 'bg-transparent hover:bg-white/5 text-white',
+  }[variant]
+  const s = {
+    sm: 'h-8 px-3 text-xs rounded-lg',
+    md: 'h-10 px-4 text-sm rounded-xl',
+    lg: 'h-12 px-5 text-base rounded-2xl',
+  }[size]
+  return (
+    <button type={type} onClick={onClick} className={`${v} ${s} inline-flex items-center gap-2 transition ${className}`}>
+      {children}
+    </button>
+  )
+}
+const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = (props) => (
+  <input
+    {...props}
+    className={`h-10 w-full rounded-xl bg-black/20 border border-white/10 px-3 text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/40 ${props.className || ''}`}
+  />
+)
+
+/* ---------------------------------------------
+ * Helpers & Demo Data
+ * ------------------------------------------- */
+const mkTrend = (n: number, base = 50, amp = 20, step = 2) =>
+  Array.from({ length: n }).map((_, i) => ({ x: i + 1, y: Math.round(base + Math.sin(i / 2) * amp + i * step) }))
+const trend12 = mkTrend(12)
+const trend6 = mkTrend(6)
+const randStep = () => Math.floor(Math.random() * 3) // 0..2
+
+/* ---------------------------------------------
+ * Export helpers
+ * ------------------------------------------- */
+function exportJobsToPDF() {
+  try {
+    const printWindow = window.open('', '_blank')
+    const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Job Export</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 24px; }
+    h1 { margin: 0 0 8px; }
+    p { margin: 0; color: #444; }
+  </style>
+</head>
+<body>
+  <h1>Job Export</h1>
+  <p>Generated ${new Date().toLocaleString()}</p>
+</body>
+</html>`
+    if (printWindow) {
+      printWindow.document.write(html)
+      printWindow.document.close()
+      setTimeout(() => {
+        printWindow.focus()
+        printWindow.print()
+      }, 300)
+    }
+  } catch {
+    alert('PDF export failed')
+  }
+}
+
+function exportJobsToExcel() {
+  try {
+    const rows = [
+      ['Job Name', 'Description', 'Library', 'Pages', 'Last Exported', 'Location'].join(','),
+      ['New Connection-43', 'Customer Quote English / undefined', 'New Connections', '01', '2025-08-24T14:38:42Z', '/exports/new-connection-43/out.pdf'].join(','),
+      ['Justification-22', 'Internal Memo / undefined', 'Justification', '01', '2025-08-23T10:11:02Z', '/exports/justification-22/out.pdf'].join(','),
+      ['Prospection-19', 'Customer Quote English / undefined', 'Prospection', '01', '2025-08-21T18:02:19Z', '/exports/prospection-19/out.pdf'].join(','),
+    ]
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `jobs-export-${Date.now()}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    alert('Excel export failed')
+  }
+}
+
+/* ---------------------------------------------
+ * Tiny Metric Tile (with optional mini chart)
+ * ------------------------------------------- */
+const MetricTile: React.FC<{ label: string; value: string | number; chart?: 'line' | 'area' | 'none' }> = ({ label, value, chart = 'area' }) => (
+  <div className="rounded-xl border border-white/10 p-3 bg-white/5">
+    <div className="text-xs text-gray-400">{label}</div>
+    <div className="text-xl font-semibold text-white">{typeof value === 'number' ? value.toLocaleString() : value}</div>
+    {chart !== 'none' && (
+      <div className="h-12">
+        <ResponsiveContainer width="100%" height="100%">
+          {chart === 'area' ? (
+            <AreaChart data={trend12}>
+              <Tooltip
+                contentStyle={{
+                  background: '#111827',
+                  border: '1px solid #374151',
+                  borderRadius: 12,
+                  color: '#F9FAFB',
+                }}
+              />
+              <Area type="monotone" dataKey="y" fillOpacity={0.2} strokeWidth={2} />
+            </AreaChart>
+          ) : (
+            <LineChart data={trend12}>
+              <Tooltip
+                contentStyle={{
+                  background: '#111827',
+                  border: '1px solid #374151',
+                  borderRadius: 12,
+                  color: '#F9FAFB',
+                }}
+              />
+              <Line type="monotone" dataKey="y" strokeWidth={2} />
+            </LineChart>
+          )}
+        </ResponsiveContainer>
+      </div>
+    )}
+  </div>
+)
+
+/* ---------------------------------------------
+ * 4) Export Status View (full page)
+ * ------------------------------------------- */
+const ExportStatusView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+  const rows = useMemo(
+    () => [
+      { name: 'New Connection-43', desc: 'undefined', lib: 'New Connections', pages: '01', last: '2025-08-24T14:38:42Z', path: '/exports/new-connection-43/out.pdf', status: 'Succeeded' },
+      { name: 'New Connection-43', desc: 'Customer Quote English', lib: 'New Connections', pages: '01', last: '2025-08-24T19:40:44Z', path: '/exports/new-connection-43/out2.pdf', status: 'Succeeded' },
+      { name: 'New Connection-44', desc: 'undefined', lib: 'New Connections', pages: '01', last: '2025-08-18T20:05:22Z', path: '/exports/new-connection-44/out.pdf', status: 'In Queue' },
+      { name: 'Justification-38', desc: 'BON DE LIVRAISON', lib: 'Justification', pages: '01', last: '2025-08-18T20:15:21Z', path: '/exports/justification-38/out.pdf', status: 'Failed' },
+      { name: 'Prospection-30', desc: 'undefined', lib: 'Prospection', pages: '01', last: '2025-08-18T18:59:00Z', path: '/exports/prospection-30/out.pdf', status: 'Succeeded' },
+    ],
+    []
+  )
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-black text-white grid grid-cols-12 gap-6 p-6 lg:p-8">
+      {/* Left Sidebar */}
+      <aside className="col-span-12 md:col-span-3 xl:col-span-2 border border-white/10 rounded-2xl bg-white/5">
+        <div className="p-3 border-b border-white/10">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Input placeholder="Search …" />
+          </div>
+          <div className="mt-2 flex items-center justify-end gap-2 text-xs text-gray-300">
+            <span className="px-2 py-1 rounded-lg bg-white/10 border border-white/10">↕</span>
+            <span className="px-2 py-1 rounded-lg bg-white/10 border border-white/10">⇅</span>
+          </div>
+        </div>
+        <nav className="p-2 space-y-1">
+          {['All Batches', 'New Connection', 'Justification', 'Prospection', 'HR'].map((label) => (
+            <button key={label} className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 text-sm">{label}</button>
+          ))}
+        </nav>
+      </aside>
+
+      {/* Main Panel */}
+      <section className="col-span-12 md:col-span-9 xl:col-span-10 space-y-4">
+        {/* Top Tabs & Controls */}
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Primary Tabs */}
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1 text-xs rounded-lg bg-white/10 border border-white/10">Batch Summary</span>
+                <span className="px-3 py-1 text-xs rounded-lg bg-cyan-500/20 border border-cyan-500/30 text-cyan-300">Job Details</span>
+              </div>
+              {/* Secondary Tabs */}
+              <div className="flex items-center gap-1 ml-2">
+                {['Exported Jobs', 'Succeeded', 'In Queue', 'Failed'].map((t, idx) => (
+                  <Button key={t} size="sm" variant={idx === 0 ? 'default' : 'outline'}>{t}</Button>
+                ))}
+              </div>
+              {/* Controls Right */}
+              <div className="ml-auto flex items-center gap-2">
+                <Input type="text" defaultValue="Aug 17, 2025 – Aug 24, 2025" className="w-56" />
+                <select className="h-10 rounded-xl bg-black/20 border border-white/10 px-3 text-sm">
+                  <option>Batch instances</option>
+                  <option>Match single</option>
+                </select>
+                <Button variant="outline" size="sm">Sort ↑↓</Button>
+                <div className="relative w-56">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <Input placeholder="Search jobs…" className="pl-9" />
+                </div>
+              </div>
+            </div>
+          </CardHeader>
+        </Card>
+
+        {/* Job Table */}
+        <Card>
+          <CardHeader className="flex items-center justify-between">
+            <CardTitle className="text-base">Exported Jobs</CardTitle>
+            <div className="text-xs text-gray-400">Showing {rows.length} records</div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {rows.map((r) => (
+                <div key={`${r.name}-${r.last}`} className="grid grid-cols-12 items-center gap-3 p-3 border border-white/10 rounded-xl bg-white/5 hover:bg-white/10">
+                  <div className="col-span-12 md:col-span-3">
+                    <div className="font-medium text-white">{r.name}</div>
+                    <div className="text-xs text-gray-400">{r.desc || '—'}</div>
+                  </div>
+                  <div className="col-span-6 md:col-span-2 text-sm">
+                    <div className="text-gray-400 text-xs">Document Libraries</div>
+                    <div className="font-medium">{r.lib}</div>
+                  </div>
+                  <div className="col-span-6 md:col-span-1 text-sm">
+                    <div className="text-gray-400 text-xs">Pages</div>
+                    <div className="font-medium">{r.pages}</div>
+                  </div>
+                  <div className="col-span-6 md:col-span-3 text-sm">
+                    <div className="text-gray-400 text-xs">Last Exported</div>
+                    <div className="font-mono">{r.last}</div>
+                  </div>
+                  <div className="col-span-6 md:col-span-3 text-xs truncate">
+                    <div className="text-gray-400 text-xs">Exported Location</div>
+                    <a className="underline text-cyan-300" href={r.path}>{r.path}</a>
+                  </div>
+                  {/* Row Sparkline */}
+                  <div className="col-span-12">
+                    <div className="h-12">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={trend6}>
+                          <Tooltip
+                            contentStyle={{
+                              background: '#111827',
+                              border: '1px solid #374151',
+                              borderRadius: 12,
+                              color: '#F9FAFB',
+                            }}
+                          />
+                          <Line type="monotone" dataKey="y" strokeWidth={2} stroke="#3B82F6" />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Footer Actions */}
+        <div className="flex items-center justify-end gap-2">
+          <Button onClick={exportJobsToPDF}><Download className="w-4 h-4" /> Export to PDF</Button>
+          <Button onClick={exportJobsToExcel}><Download className="w-4 h-4" /> Export to Excel</Button>
+          <Button variant="outline" className="ml-auto" onClick={onBack}>Back to Dashboard</Button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+/* ---------------------------------------------
+ * Generic Detail View (for other sections)
+ * ------------------------------------------- */
+const GenericDetail: React.FC<{ title: string; onBack: () => void; subtitle?: string }>
+  = ({ title, onBack, subtitle }) => {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-black text-white p-6 lg:p-8">
+      <Card>
+        <CardHeader className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-lg">{title}</CardTitle>
+            {subtitle && <div className="text-xs text-gray-400 mt-1">{subtitle}</div>}
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative w-60">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Input placeholder={`Search ${title.toLowerCase()}…`} className="pl-9" />
+            </div>
+            <select className="h-10 rounded-xl bg-black/20 border border-white/10 px-3 text-sm">
+              {['All', 'Succeeded', 'In Queue', 'Failed'].map((f) => (
+                <option key={f}>{f}</option>
+              ))}
+            </select>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="h-56">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={trend12}>
+                <Tooltip
+                  contentStyle={{
+                    background: '#111827',
+                    border: '1px solid #374151',
+                    borderRadius: 12,
+                    color: '#F9FAFB',
+                  }}
+                />
+                <XAxis dataKey="x" stroke="#9CA3AF" fontSize={12} />
+                <YAxis stroke="#9CA3AF" fontSize={12} />
+                <Bar dataKey="y" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="p-3 rounded-xl border border-white/10 bg-white/5">
+                <div className="text-xs text-gray-400">Record {i + 1}</div>
+                <div className="text-sm text-white">Details about {title} #{i + 1}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 text-right">
+            <Button variant="outline" onClick={onBack}>Back to Dashboard</Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+/* ---------------------------------------------
+ * MAIN: Dashboard with small live movement
+ * ------------------------------------------- */
 export default function DMSDashboard() {
+  const [view, setView] = useState<ViewKey>(VIEWS.DASHBOARD)
+  const [currentTime, setCurrentTime] = useState(new Date())
   const [dateRange, setDateRange] = useState('last30days')
   const [departmentFilter, setDepartmentFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [searchTerm, setSearchTerm] = useState('')
-  const [filteredDocuments, setFilteredDocuments] = useState([])
-  const [showDropdown, setShowDropdown] = useState(null)
-  const [currentTime, setCurrentTime] = useState(new Date())
 
-  // Update time every second
+  // "Live" metrics (only UI-level; gently bump numbers)
+  const [currentBatch, setCurrentBatch] = useState([
+    { label: 'Batches', value: 150 },
+    { label: 'Jobs', value: 320 },
+    { label: 'Scanning', value: 210 },
+    { label: 'Indexing', value: 240 },
+    { label: 'Quality', value: 180 },
+    { label: 'Re-Scanning', value: 30 },
+    { label: 'Re-Indexing', value: 25 },
+    { label: 'Re-Quality', value: 12 },
+  ])
+  const [activeUsers, setActiveUsers] = useState([
+    { k: 'Users', v: 138 },
+    { k: 'Scan', v: 72 },
+    { k: 'Index', v: 51 },
+    { k: 'Quality', v: 89 },
+  ])
+  const [productivity, setProductivity] = useState([
+    { label: 'Scanned Documents', value: 1280 },
+    { label: 'Scanned Pages', value: 56210 },
+    { label: 'Re-Scanned', value: 240 },
+    { label: 'Indexed Documents', value: 1180 },
+    { label: 'Indexed Pages', value: 54890 },
+    { label: 'Reindexed', value: 200 },
+    { label: 'Quality Documents', value: 970 },
+    { label: 'Quality Pages', value: 42030 },
+  ])
+
+  // Tickers for subtle movement
   useEffect(() => {
-    const timer = setInterval(() => {
+    const t1 = setInterval(() => {
       setCurrentTime(new Date())
     }, 1000)
-    return () => clearInterval(timer)
+
+    // Every 4s bump current batch by 0..2
+    const t2 = setInterval(() => {
+      setCurrentBatch((prev) =>
+        prev.map((m, i) => {
+          const delta = (i % 3 === 0) ? 0 : randStep() // keep some stable
+          return { ...m, value: m.value + delta }
+        })
+      )
+    }, 4000)
+
+    // Every 5s bump active users by 0..2
+    const t3 = setInterval(() => {
+      setActiveUsers((prev) =>
+        prev.map((m, i) => {
+          const delta = i === 0 ? randStep() : (randStep() > 1 ? 1 : 0) // Users grows a hair faster
+          return { ...m, v: m.v + delta }
+        })
+      )
+    }, 5000)
+
+    // Every 6s bump productivity counts slightly
+    const t4 = setInterval(() => {
+      setProductivity((prev) =>
+        prev.map((m, i) => {
+          const delta = i % 2 === 0 ? randStep() : (randStep() ? 1 : 0)
+          return { ...m, value: m.value + delta }
+        })
+      )
+    }, 6000)
+
+    return () => {
+      clearInterval(t1)
+      clearInterval(t2)
+      clearInterval(t3)
+      clearInterval(t4)
+    }
   }, [])
 
-  // Core dashboard metrics
-  const dashboardData = {
-    totalDocuments: 45680,
-    uploadedDocs: 1200,
-    indexed: 960,
-    inQA: 80,
-    exported: 650,
-    failedToExport: 7850,
-    totalPages: 10740,
-    
-    // User metrics
-    totalUsers: 545,
-    activeUsers: 350,
-    inactiveUsers: 120,
-    notLoggedInUsers: 75,
-    
-    // System metrics
-    storageUsed: 2.4,
-    storageTotal: 10,
-    systemUptime: 99.8,
-    pendingApproval: 145,
-    securityViolations: 89,
-    avgProcessingTime: 2.3,
-    
-    // Additional metrics
-    approvedDocs: 8940,
-    rejectedDocs: 234,
-    archivedDocs: 2340,
-    totalDownloads: 15670,
-    avgUploadSpeed: 12.5,
-    avgSearchTime: 0.8
+  const dashboardData = useMemo(
+    () => ({
+      exported: 650,
+      failedToExport: 9,
+      storageUsed: 2.4,
+      storageTotal: 10,
+      systemUptime: 99.8,
+      securityViolations: 2,
+      avgUploadSpeed: 12.5,
+      avgSearchTime: 0.8,
+      batchJobsTotal: 245,
+      batchJobsCompleted: 210,
+      batchJobsRunning: 15,
+      batchJobsFailed: 20,
+    }),
+    []
+  )
+
+  const documentStatusData = useMemo(
+    () => [
+      { name: 'Approved', value: 8940, color: '#10B981' },
+      { name: 'Rejected', value: 234, color: '#EF4444' },
+      { name: 'In Review', value: 80, color: '#3B82F6' },
+      { name: 'Archived', value: 2340, color: '#F59E0B' },
+    ],
+    []
+  )
+  const departmentData = useMemo(
+    () => [
+      { name: 'HR', uploads: 4500, exports: 3200 },
+      { name: 'Finance', uploads: 3800, exports: 2900 },
+      { name: 'IT', uploads: 8200, exports: 6800 },
+      { name: 'Operations', uploads: 6100, exports: 4500 },
+      { name: 'Sales', uploads: 5000, exports: 3800 },
+      { name: 'Legal', uploads: 2400, exports: 1900 },
+    ],
+    []
+  )
+  const monthlyTrendData = useMemo(
+    () => [
+      { month: 'Jan', uploads: 4200, exports: 3240, storage: 1.8, users: 520 },
+      { month: 'Feb', uploads: 3800, exports: 3100, storage: 2.0, users: 525 },
+      { month: 'Mar', uploads: 5200, exports: 4800, storage: 2.1, users: 535 },
+      { month: 'Apr', uploads: 4780, exports: 4200, storage: 2.2, users: 540 },
+      { month: 'May', uploads: 5100, exports: 4600, storage: 2.3, users: 545 },
+      { month: 'Jun', uploads: 5400, exports: 5000, storage: 2.4, users: 545 },
+    ],
+    []
+  )
+  const weeklyActivityData = useMemo(
+    () => [
+      { day: 'Mon', uploads: 180, searches: 1200, downloads: 450 },
+      { day: 'Tue', uploads: 220, searches: 1450, downloads: 520 },
+      { day: 'Wed', uploads: 190, searches: 1350, downloads: 480 },
+      { day: 'Thu', uploads: 240, searches: 1600, downloads: 580 },
+      { day: 'Fri', uploads: 280, searches: 1800, downloads: 620 },
+      { day: 'Sat', uploads: 120, searches: 800, downloads: 280 },
+      { day: 'Sun', uploads: 80, searches: 600, downloads: 190 },
+    ],
+    []
+  )
+
+  const go = (v: ViewKey) => () => setView(v)
+  const back = () => setView(VIEWS.DASHBOARD)
+
+  // Route switch
+  if (view !== VIEWS.DASHBOARD) {
+    if (view === VIEWS.EXPORT_STATUS) {
+      return <ExportStatusView onBack={back} />
+    }
+    const titleMap: Record<ViewKey, string> = {
+      [VIEWS.DASHBOARD]: 'Dashboard',
+      [VIEWS.EXPORT_STATUS]: 'Export Status',
+      [VIEWS.CURRENT_BATCH]: 'Current Batch',
+      [VIEWS.ACTIVE_USERS]: 'Active Users',
+      [VIEWS.PRODUCTIVITY]: 'Productivity',
+      [VIEWS.USER_ACTIVITY]: 'User Activity',
+      [VIEWS.BATCH_PROCESSING]: 'Batch Processing',
+    }
+    return <GenericDetail title={titleMap[view]} onBack={back} subtitle="Detailed analytics view" />
   }
 
-  // Chart data
-  const documentStatusData = [
-    { name: 'Approved', value: 8940, color: '#10B981' },
-    { name: 'Pending', value: 145, color: '#F59E0B' },
-    { name: 'Rejected', value: 234, color: '#EF4444' },
-    { name: 'In Review', value: 80, color: '#3B82F6' }
-  ]
-
-  const departmentData = [
-    { name: 'HR', value: 4500, color: '#06B6D4' },
-    { name: 'Finance', value: 3800, color: '#8B5CF6' },
-    { name: 'IT', value: 8200, color: '#10B981' },
-    { name: 'Operations', value: 6100, color: '#F59E0B' },
-    { name: 'Sales', value: 5000, color: '#EF4444' }
-  ]
-
-  const trendData = [
-    { month: 'Jan', uploads: 400, exports: 240 },
-    { month: 'Feb', uploads: 300, exports: 139 },
-    { month: 'Mar', uploads: 500, exports: 380 },
-    { month: 'Apr', uploads: 278, exports: 390 },
-    { month: 'May', uploads: 189, exports: 480 },
-    { month: 'Jun', uploads: 239, exports: 380 }
-  ]
-
-  // Full document list for filtering
-  const allDocuments = [
-    {
-      id: 'DOC-2024-001',
-      title: 'Employee Handbook 2024',
-      owner: 'Alice Johnson',
-      department: 'hr',
-      status: 'Approved',
-      priority: 'High',
-      modified: '2024-08-25',
-      size: '2.4 MB',
-      pages: 45
-    },
-    {
-      id: 'DOC-2024-002',
-      title: 'Q3 Financial Analysis Report',
-      owner: 'Bob Chen',
-      department: 'finance',
-      status: 'In Review',
-      priority: 'Critical',
-      modified: '2024-08-24',
-      size: '5.7 MB',
-      pages: 78
-    },
-    {
-      id: 'DOC-2024-003',
-      title: 'Network Security Protocol V4',
-      owner: 'Charlie Wilson',
-      department: 'it',
-      status: 'Under Review',
-      priority: 'High',
-      modified: '2024-08-23',
-      size: '1.8 MB',
-      pages: 32
-    },
-    {
-      id: 'DOC-2024-004',
-      title: 'Operations Workflow Manual',
-      owner: 'Diana Martinez',
-      department: 'operations',
-      status: 'Exported',
-      priority: 'Medium',
-      modified: '2024-08-22',
-      size: '8.3 MB',
-      pages: 156
-    },
-    {
-      id: 'DOC-2024-005',
-      title: 'Sales Training Materials',
-      owner: 'Eva Thompson',
-      department: 'sales',
-      status: 'Approved',
-      priority: 'Low',
-      modified: '2024-08-21',
-      size: '3.2 MB',
-      pages: 67
-    },
-    {
-      id: 'DOC-2024-006',
-      title: 'IT Infrastructure Report',
-      owner: 'Frank Rodriguez',
-      department: 'it',
-      status: 'Pending',
-      priority: 'High',
-      modified: '2024-08-20',
-      size: '4.1 MB',
-      pages: 89
-    }
-  ]
-
-  // Filter documents based on current filters
-  useEffect(() => {
-    let filtered = allDocuments
-
-    // Filter by department
-    if (departmentFilter !== 'all') {
-      filtered = filtered.filter(doc => doc.department === departmentFilter)
-    }
-
-    // Filter by status
-    if (statusFilter !== 'all') {
-      const statusMap = {
-        'approved': ['Approved', 'Exported'],
-        'pending': ['Pending', 'In Review', 'Under Review'],
-        'review': ['In Review', 'Under Review']
-      }
-      if (statusMap[statusFilter]) {
-        filtered = filtered.filter(doc => statusMap[statusFilter].includes(doc.status))
-      }
-    }
-
-    // Filter by search term
-    if (searchTerm) {
-      filtered = filtered.filter(doc => 
-        doc.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        doc.owner.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        doc.id.toLowerCase().includes(searchTerm.toLowerCase())
-      )
-    }
-
-    setFilteredDocuments(filtered)
-  }, [departmentFilter, statusFilter, searchTerm])
-
-  // PDF Export Function
-  const exportToPDF = async () => {
-    try {
-      // Create a new window with the dashboard content
-      const printWindow = window.open('', '_blank')
-      
-      const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Document Management Dashboard Report</title>
-          <style>
-            body { 
-              font-family: Arial, sans-serif; 
-              margin: 20px; 
-              background: white;
-              color: black;
-            }
-            .header { 
-              text-align: center; 
-              margin-bottom: 30px; 
-              border-bottom: 2px solid #333;
-              padding-bottom: 20px;
-            }
-            .metric-grid { 
-              display: grid; 
-              grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
-              gap: 20px; 
-              margin: 20px 0; 
-            }
-            .metric-card { 
-              border: 1px solid #ddd; 
-              padding: 15px; 
-              border-radius: 8px;
-              background: #f9f9f9;
-            }
-            .metric-title { 
-              font-size: 12px; 
-              color: #666; 
-              margin-bottom: 5px; 
-            }
-            .metric-value { 
-              font-size: 24px; 
-              font-weight: bold; 
-              color: #333;
-            }
-            .table { 
-              width: 100%; 
-              border-collapse: collapse; 
-              margin: 20px 0; 
-            }
-            .table th, .table td { 
-              border: 1px solid #ddd; 
-              padding: 8px; 
-              text-align: left; 
-            }
-            .table th { 
-              background-color: #f2f2f2; 
-              font-weight: bold;
-            }
-            .section { 
-              margin: 30px 0; 
-              page-break-inside: avoid;
-            }
-            .section h2 {
-              border-bottom: 1px solid #333;
-              padding-bottom: 10px;
-              color: #333;
-            }
-            @media print {
-              body { margin: 0; }
-              .no-print { display: none; }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <h1>Document Management System</h1>
-            <h2>Analytics & Control Center Report</h2>
-            <p>Generated on: ${currentTime.toLocaleDateString()} at ${currentTime.toLocaleTimeString()}</p>
-            <p>Date Range: ${dateRange.replace(/([A-Z])/g, ' $1').toLowerCase()}</p>
-          </div>
-
-          <div class="section">
-            <h2>Document Processing Metrics</h2>
-            <div class="metric-grid">
-              <div class="metric-card">
-                <div class="metric-title">Uploaded Documents</div>
-                <div class="metric-value">${dashboardData.uploadedDocs.toLocaleString()}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">Indexed</div>
-                <div class="metric-value">${dashboardData.indexed.toLocaleString()}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">In QA</div>
-                <div class="metric-value">${dashboardData.inQA.toLocaleString()}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">Exported</div>
-                <div class="metric-value">${dashboardData.exported.toLocaleString()}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">Failed to Export</div>
-                <div class="metric-value">${dashboardData.failedToExport.toLocaleString()}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">Total Pages</div>
-                <div class="metric-value">${dashboardData.totalPages.toLocaleString()}</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="section">
-            <h2>User Activity</h2>
-            <div class="metric-grid">
-              <div class="metric-card">
-                <div class="metric-title">Active Users</div>
-                <div class="metric-value">${dashboardData.activeUsers.toLocaleString()}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">Inactive Users</div>
-                <div class="metric-value">${dashboardData.inactiveUsers.toLocaleString()}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">Not Logged-In Users</div>
-                <div class="metric-value">${dashboardData.notLoggedInUsers.toLocaleString()}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">Total Users</div>
-                <div class="metric-value">${dashboardData.totalUsers.toLocaleString()}</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="section">
-            <h2>System Performance</h2>
-            <div class="metric-grid">
-              <div class="metric-card">
-                <div class="metric-title">Storage Used</div>
-                <div class="metric-value">${dashboardData.storageUsed}TB / ${dashboardData.storageTotal}TB</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">System Uptime</div>
-                <div class="metric-value">${dashboardData.systemUptime}%</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">Pending Approvals</div>
-                <div class="metric-value">${dashboardData.pendingApproval.toLocaleString()}</div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-title">Avg Processing Time</div>
-                <div class="metric-value">${dashboardData.avgProcessingTime} min</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="section">
-            <h2>Recent Documents</h2>
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Document ID</th>
-                  <th>Title</th>
-                  <th>Owner</th>
-                  <th>Department</th>
-                  <th>Status</th>
-                  <th>Priority</th>
-                  <th>Size</th>
-                  <th>Modified</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${filteredDocuments.map(doc => `
-                  <tr>
-                    <td>${doc.id}</td>
-                    <td>${doc.title}</td>
-                    <td>${doc.owner}</td>
-                    <td>${doc.department.toUpperCase()}</td>
-                    <td>${doc.status}</td>
-                    <td>${doc.priority}</td>
-                    <td>${doc.size}</td>
-                    <td>${doc.modified}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-
-          <div class="section">
-            <h2>Document Status Summary</h2>
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Count</th>
-                  <th>Percentage</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${documentStatusData.map(status => `
-                  <tr>
-                    <td>${status.name}</td>
-                    <td>${status.value.toLocaleString()}</td>
-                    <td>${((status.value / documentStatusData.reduce((sum, s) => sum + s.value, 0)) * 100).toFixed(1)}%</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-
-          <div class="section">
-            <h2>Department Distribution</h2>
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Department</th>
-                  <th>Document Count</th>
-                  <th>Percentage</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${departmentData.map(dept => `
-                  <tr>
-                    <td>${dept.name}</td>
-                    <td>${dept.value.toLocaleString()}</td>
-                    <td>${((dept.value / departmentData.reduce((sum, d) => sum + d.value, 0)) * 100).toFixed(1)}%</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-        </body>
-        </html>
-      `
-      
-      printWindow.document.write(htmlContent)
-      printWindow.document.close()
-      
-      // Wait for content to load then print
-      setTimeout(() => {
-        printWindow.focus()
-        printWindow.print()
-      }, 500)
-
-    } catch (error) {
-      console.error('Export failed:', error)
-      alert('Export failed. Please try again.')
-    }
-  }
-
-  const MetricCard = ({ title, value, icon: Icon, change, changeType, color = "blue", onClick }) => {
-    const colorClasses = {
-      blue: "from-blue-500/10 to-blue-600/10 border-blue-500/20",
-      green: "from-green-500/10 to-green-600/10 border-green-500/20",
-      yellow: "from-yellow-500/10 to-yellow-600/10 border-yellow-500/20",
-      red: "from-red-500/10 to-red-600/10 border-red-500/20",
-      purple: "from-purple-500/10 to-purple-600/10 border-purple-500/20"
-    }
-
-    const iconColors = {
-      blue: "text-blue-400",
-      green: "text-green-400", 
-      yellow: "text-yellow-400",
-      red: "text-red-400",
-      purple: "text-purple-400"
-    }
-
-    return (
-      <div 
-        className={`relative bg-gradient-to-br ${colorClasses[color]} border rounded-2xl p-4 sm:p-5 backdrop-blur-sm hover:shadow-xl transition-all duration-300 overflow-hidden group hover:scale-105 cursor-pointer`}
-        onClick={onClick}
-      >
-        {/* Background pattern */}
-        <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent opacity-50"></div>
-        
-        {/* Icon positioned in top right */}
-        <div className="absolute top-4 right-4">
-          <div className={`p-2.5 bg-white/5 backdrop-blur-sm rounded-xl border border-white/10 group-hover:bg-white/10 transition-all duration-300`}>
-            <Icon className={`w-5 h-5 ${iconColors[color]}`} />
-          </div>
-        </div>
-        
-        <div className="relative z-10">
-          {/* Title */}
-          <p className="text-xs sm:text-sm font-medium text-gray-300 mb-2 pr-12">{title}</p>
-          
-          {/* Value */}
-          <p className="text-2xl sm:text-3xl font-bold text-white mb-2 pr-12">
-            {typeof value === 'number' ? value.toLocaleString() : value}
-          </p>
-          
-          {/* Change indicator */}
-          {change && (
-            <div className="flex items-center text-xs sm:text-sm">
-              <span className={`font-semibold ${changeType === 'positive' ? 'text-green-400' : 'text-red-400'}`}>
-                {changeType === 'positive' ? '+' : ''}{change}
-              </span>
-              <span className="text-gray-400 ml-1">vs yesterday</span>
-            </div>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  const getStatusBadge = (status) => {
-    const statusStyles = {
-      'Approved': 'bg-green-500/20 text-green-300 border-green-500/30',
-      'In Review': 'bg-blue-500/20 text-blue-300 border-blue-500/30',
-      'Under Review': 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
-      'Exported': 'bg-green-500/20 text-green-300 border-green-500/30',
-      'Pending': 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
-      'Export Failed': 'bg-red-500/20 text-red-300 border-red-500/30'
-    }
-    
-    return (
-      <span className={`px-3 py-1 rounded-full text-xs font-medium border ${statusStyles[status] || 'bg-gray-600/20 text-gray-300 border-gray-600/30'}`}>
-        {status}
-      </span>
-    )
-  }
-
-  const getPriorityBadge = (priority) => {
-    const priorityStyles = {
-      'Critical': 'bg-red-500/20 text-red-300 border-red-500/30',
-      'High': 'bg-orange-500/20 text-orange-300 border-orange-500/30',
-      'Medium': 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
-      'Low': 'bg-green-500/20 text-green-300 border-green-500/30'
-    }
-    
-    return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium border ${priorityStyles[priority]}`}>
-        {priority}
-      </span>
-    )
-  }
-
-  const handleDocumentAction = (action, docId) => {
-    switch(action) {
-      case 'view':
-        alert(`Opening document: ${docId}`)
-        break
-      case 'download':
-        alert(`Downloading document: ${docId}`)
-        break
-      case 'edit':
-        alert(`Editing document: ${docId}`)
-        break
-      case 'delete':
-        if (confirm(`Are you sure you want to delete document: ${docId}?`)) {
-          alert(`Document ${docId} deleted`)
-        }
-        break
-      default:
-        break
-    }
-    setShowDropdown(null)
-  }
-
-  const refreshData = () => {
-    alert('Refreshing dashboard data...')
-    // In a real app, this would trigger a data refresh
-  }
-
+  /* ------------------ DASHBOARD ------------------ */
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-black text-white">
-      {/* Background decoration */}
+      {/* Background blobs */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-purple-500/5 rounded-full blur-3xl animate-pulse"></div>
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-cyan-500/5 rounded-full blur-3xl animate-pulse delay-1000"></div>
+        <div className="absolute -top-40 -right-40 w-96 h-96 bg-purple-500/5 rounded-full blur-3xl animate-pulse"></div>
+        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl animate-pulse delay-1000"></div>
       </div>
 
-      {/* Main Content - Full Width */}
-      <div className="relative z-10 w-full p-4 sm:p-6 lg:p-8">
-        {/* Header Section */}
-        <div className="mb-8">
+      <div className="relative z-10 w-full p-6 lg:p-8">
+        {/* Header */}
+        <header className="mb-8">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-            <div>
-              <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold bg-gradient-to-r from-white via-gray-100 to-gray-300 bg-clip-text text-transparent mb-3">
-                Document Management
-              </h1>
-              <p className="text-lg sm:text-xl text-gray-300">Analytics & Control Center</p>
-              <p className="text-sm text-gray-400 mt-2">
-                Last updated: {currentTime.toLocaleString()}
-              </p>
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-2xl bg-cyan-500/20 border border-cyan-500/30 grid place-items-center">
+                <LayoutDashboard className="w-5 h-5 text-cyan-300" />
+              </div>
+              <div>
+                <h1 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-white via-gray-100 to-gray-300 bg-clip-text text-transparent">Document Management</h1>
+                <p className="text-lg text-gray-300">Analytics & Control Center</p>
+                <p className="text-xs text-gray-400 mt-1">Last updated: {currentTime.toLocaleString()}</p>
+              </div>
             </div>
-            
-            {/* Search and Actions */}
-            <div className="flex items-center gap-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-                <input
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              <div className="relative w-full sm:w-80">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                <Input
                   type="search"
-                  placeholder="Search documents..."
+                  placeholder="Search documents…"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 pr-4 py-3 bg-gray-800/50 backdrop-blur-sm border border-gray-700/50 rounded-xl focus:ring-2 focus:ring-blue-500/50 focus:border-transparent text-white placeholder-gray-400 w-64 sm:w-80 transition-all"
+                  className="pl-10 pr-4"
                 />
               </div>
-              <button 
-                onClick={refreshData}
-                className="px-4 py-3 bg-gray-700/50 hover:bg-gray-700 text-white rounded-xl font-medium transition-all duration-200 flex items-center gap-2"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Refresh
-              </button>
-              <button 
-                onClick={exportToPDF}
-                className="px-4 sm:px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-medium hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-lg flex items-center gap-2"
-              >
-                <FileDown className="w-4 h-4" />
-                Export Report
-              </button>
+              <div className="flex items-center gap-2">
+                <Button onClick={() => alert('Refreshing dashboard data…')}><RefreshCw className="w-4 h-4" /> Refresh</Button>
+                <Button onClick={() => alert('Opening settings…')} variant="outline"><Settings className="w-4 h-4" /> Settings</Button>
+              </div>
             </div>
           </div>
-        </div>
+        </header>
 
         {/* Filters */}
-        <div className="mb-8">
-          <div className="bg-gray-800/40 backdrop-blur-xl border border-gray-700/50 rounded-2xl p-4 sm:p-6">
-            <div className="flex flex-wrap items-center gap-4">
-              <div className="flex items-center gap-2">
-                <Calendar className="w-5 h-5 text-gray-400" />
-                <select 
-                  value={dateRange}
-                  onChange={(e) => setDateRange(e.target.value)}
-                  className="px-4 py-2 bg-gray-700/50 border border-gray-600/50 rounded-lg focus:ring-2 focus:ring-blue-500/50 text-white text-sm"
-                >
-                  <option value="today">Today</option>
-                  <option value="last7days">Last 7 Days</option>
-                  <option value="last30days">Last 30 Days</option>
-                  <option value="last90days">Last 90 Days</option>
-                </select>
-              </div>
-              
-              <select 
-                value={departmentFilter}
-                onChange={(e) => setDepartmentFilter(e.target.value)}
-                className="px-4 py-2 bg-gray-700/50 border border-gray-600/50 rounded-lg focus:ring-2 focus:ring-blue-500/50 text-white text-sm"
-              >
-                <option value="all">All Departments</option>
-                <option value="hr">Human Resources</option>
-                <option value="finance">Finance</option>
-                <option value="it">IT</option>
-                <option value="operations">Operations</option>
-                <option value="sales">Sales</option>
-              </select>
-              
-              <select 
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-4 py-2 bg-gray-700/50 border border-gray-600/50 rounded-lg focus:ring-2 focus:ring-blue-500/50 text-white text-sm"
-              >
-                <option value="all">All Status</option>
-                <option value="approved">Approved</option>
-                <option value="pending">Pending</option>
-                <option value="review">Under Review</option>
-              </select>
-              
-              <div className="ml-auto flex items-center gap-2 text-sm text-gray-400">
-                <Filter className="w-4 h-4" />
-                <span>Results: {filteredDocuments.length}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Document Processing Metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 mb-8">
-          <MetricCard
-            title="Uploaded Docs"
-            value={dashboardData.uploadedDocs}
-            icon={Upload}
-            change="12%"
-            changeType="positive"
-            color="green"
-            onClick={() => alert('Viewing uploaded documents details')}
-          />
-          <MetricCard
-            title="Indexed"
-            value={dashboardData.indexed}
-            icon={Eye}
-            color="blue"
-            onClick={() => alert('Viewing indexed documents')}
-          />
-          <MetricCard
-            title="In QA"
-            value={dashboardData.inQA}
-            icon={CheckCircle}
-            color="yellow"
-            onClick={() => alert('Viewing QA queue')}
-          />
-          <MetricCard
-            title="Exported"
-            value={dashboardData.exported}
-            icon={Download}
-            change="8%"
-            changeType="positive"
-            color="green"
-            onClick={() => alert('Viewing exported documents')}
-          />
-          <MetricCard
-            title="Failed to Export"
-            value={dashboardData.failedToExport}
-            icon={XCircle}
-            change="15%"
-            changeType="negative"
-            color="red"
-            onClick={() => alert('Viewing failed exports')}
-          />
-          <MetricCard
-            title="Total Pages"
-            value={dashboardData.totalPages}
-            icon={FileText}
-            color="purple"
-            onClick={() => alert('Viewing page statistics')}
-          />
-        </div>
-
-        {/* User Activity Metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-8">
-          <MetricCard
-            title="Active Users"
-            value={dashboardData.activeUsers}
-            icon={Users}
-            change="5%"
-            changeType="positive"
-            color="green"
-            onClick={() => alert('Viewing active users')}
-          />
-          <MetricCard
-            title="Inactive Users"
-            value={dashboardData.inactiveUsers}
-            icon={UserX}
-            color="yellow"
-            onClick={() => alert('Viewing inactive users')}
-          />
-          <MetricCard
-            title="Not Logged-In Users"
-            value={dashboardData.notLoggedInUsers}
-            icon={User}
-            color="red"
-            onClick={() => alert('Viewing not logged-in users')}
-          />
-          <MetricCard
-            title="Total Users"
-            value={dashboardData.totalUsers}
-            icon={Users}
-            color="blue"
-            onClick={() => alert('Viewing all users')}
-          />
-        </div>
-
-        {/* System Performance Metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-10">
-          <MetricCard
-            title="Storage Used"
-            value={`${dashboardData.storageUsed}TB`}
-            icon={HardDrive}
-            color="yellow"
-            onClick={() => alert('Viewing storage details')}
-          />
-          <MetricCard
-            title="System Uptime"
-            value={`${dashboardData.systemUptime}%`}
-            icon={Server}
-            color="green"
-            onClick={() => alert('Viewing system status')}
-          />
-          <MetricCard
-            title="Pending Approvals"
-            value={dashboardData.pendingApproval}
-            icon={AlertTriangle}
-            color="yellow"
-            onClick={() => alert('Viewing pending approvals')}
-          />
-          <MetricCard
-            title="Avg Processing"
-            value={`${dashboardData.avgProcessingTime}min`}
-            icon={Clock}
-            color="blue"
-            onClick={() => alert('Viewing processing metrics')}
-          />
-        </div>
-
-        {/* Charts Section - Responsive Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6 mb-10">
-          {/* Document Status Chart */}
-          <div className="bg-gray-800/40 backdrop-blur-xl border border-gray-700/50 rounded-2xl p-4 sm:p-6 hover:bg-gray-800/50 transition-all duration-300">
-            <div className="flex items-center justify-between mb-4 sm:mb-6">
-              <h3 className="text-lg sm:text-xl font-semibold text-white">Document Status</h3>
-              <button 
-                onClick={() => alert('Viewing detailed status breakdown')}
-                className="text-blue-400 hover:text-blue-300 text-sm font-medium"
-              >
-                Details
-              </button>
-            </div>
-            <div className="h-64 sm:h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={documentStatusData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={50}
-                    outerRadius={100}
-                    paddingAngle={2}
-                    dataKey="value"
+        <section className="mb-8">
+          <Card>
+            <CardContent>
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-3">
+                  <Calendar className="w-5 h-5 text-gray-400" />
+                  <select
+                    value={dateRange}
+                    onChange={(e) => setDateRange(e.target.value)}
+                    className="px-4 py-2 bg-gray-800/50 border border-gray-700/50 rounded-xl text-white text-sm min-w-36"
                   >
-                    {documentStatusData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: '#1F2937', 
-                      border: '1px solid #374151',
-                      borderRadius: '12px',
-                      color: '#F9FAFB'
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="grid grid-cols-2 gap-3 mt-4">
-              {documentStatusData.map((item, index) => (
-                <div key={index} className="flex items-center gap-2 text-xs sm:text-sm">
-                  <div 
-                    className="w-3 h-3 rounded-full" 
-                    style={{ backgroundColor: item.color }}
-                  ></div>
-                  <span className="text-gray-300">{item.name}: {item.value.toLocaleString()}</span>
+                    <option value="today">Today</option>
+                    <option value="last7days">Last 7 Days</option>
+                    <option value="last30days">Last 30 Days</option>
+                    <option value="last90days">Last 90 Days</option>
+                    <option value="last6months">Last 6 Months</option>
+                  </select>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Department Distribution */}
-          <div className="bg-gray-800/40 backdrop-blur-xl border border-gray-700/50 rounded-2xl p-4 sm:p-6 hover:bg-gray-800/50 transition-all duration-300">
-            <div className="flex items-center justify-between mb-4 sm:mb-6">
-              <h3 className="text-lg sm:text-xl font-semibold text-white">By Department</h3>
-              <button 
-                onClick={() => alert('Viewing department analytics')}
-                className="text-blue-400 hover:text-blue-300 text-sm font-medium"
-              >
-                Analyze
-              </button>
-            </div>
-            <div className="h-64 sm:h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={departmentData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="name" stroke="#9CA3AF" fontSize={12} />
-                  <YAxis stroke="#9CA3AF" fontSize={12} />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: '#1F2937', 
-                      border: '1px solid #374151',
-                      borderRadius: '12px',
-                      color: '#F9FAFB'
-                    }}
-                  />
-                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                    {departmentData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Trends Chart */}
-          <div className="bg-gray-800/40 backdrop-blur-xl border border-gray-700/50 rounded-2xl p-4 sm:p-6 hover:bg-gray-800/50 transition-all duration-300">
-            <div className="flex items-center justify-between mb-4 sm:mb-6">
-              <h3 className="text-lg sm:text-xl font-semibold text-white">Monthly Trends</h3>
-              <button 
-                onClick={() => alert('Viewing detailed trends')}
-                className="text-blue-400 hover:text-blue-300 text-sm font-medium"
-              >
-                Forecast
-              </button>
-            </div>
-            <div className="h-64 sm:h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="month" stroke="#9CA3AF" fontSize={12} />
-                  <YAxis stroke="#9CA3AF" fontSize={12} />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: '#1F2937', 
-                      border: '1px solid #374151',
-                      borderRadius: '12px',
-                      color: '#F9FAFB'
-                    }}
-                  />
-                  <Legend />
-                  <Line 
-                    type="monotone" 
-                    dataKey="uploads" 
-                    stroke="#3B82F6" 
-                    strokeWidth={3}
-                    dot={{ fill: '#3B82F6', strokeWidth: 2, r: 6 }}
-                    name="Uploads"
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="exports" 
-                    stroke="#10B981" 
-                    strokeWidth={3}
-                    dot={{ fill: '#10B981', strokeWidth: 2, r: 6 }}
-                    name="Exports"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-
-        {/* Content Grid - Better Organization */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mb-10">
-          {/* Recent Documents - Spans 2 columns on large screens */}
-          <div className="lg:col-span-2 bg-gray-800/40 backdrop-blur-xl border border-gray-700/50 rounded-2xl p-4 sm:p-6">
-            <div className="flex items-center justify-between mb-4 sm:mb-6">
-              <h3 className="text-lg sm:text-xl font-semibold text-white">Recent Documents</h3>
-              <div className="flex items-center gap-3">
-                <span className="text-sm text-gray-400">Showing {filteredDocuments.length} results</span>
-                <button 
-                  onClick={() => alert('Viewing all documents')}
-                  className="text-blue-400 hover:text-blue-300 text-sm font-medium flex items-center gap-2"
+                <select
+                  value={departmentFilter}
+                  onChange={(e) => setDepartmentFilter(e.target.value)}
+                  className="px-4 py-2 bg-gray-800/50 border border-gray-700/50 rounded-xl text-white text-sm min-w-40"
                 >
-                  View All <ChevronRight className="w-4 h-4" />
-                </button>
+                  <option value="all">All Departments</option>
+                  <option value="hr">Human Resources</option>
+                  <option value="finance">Finance</option>
+                  <option value="it">IT</option>
+                  <option value="operations">Operations</option>
+                  <option value="sales">Sales</option>
+                  <option value="legal">Legal</option>
+                </select>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="px-4 py-2 bg-gray-800/50 border border-gray-700/50 rounded-xl text-white text-sm min-w-32"
+                >
+                  <option value="all">All Status</option>
+                  <option value="approved">Approved</option>
+                  <option value="pending">Pending</option>
+                  <option value="review">Under Review</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+                <Button className="ml-auto"><Filter className="w-4 h-4" /> Apply Filters</Button>
               </div>
-            </div>
-            
-            <div className="space-y-4">
-              {filteredDocuments.map((doc) => (
-                <div 
-                  key={doc.id} 
-                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 bg-gray-700/30 rounded-xl hover:bg-gray-700/50 transition-all cursor-pointer group"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform">
-                      <FileText className="w-5 h-5 text-white" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h4 className="font-medium text-white mb-1 truncate group-hover:text-blue-300 transition-colors">{doc.title}</h4>
-                      <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs sm:text-sm text-gray-400">
-                        <span>{doc.owner}</span>
-                        <span className="hidden sm:inline">•</span>
-                        <span className="capitalize">{doc.department}</span>
-                        <span className="hidden sm:inline">•</span>
-                        <span>{doc.modified}</span>
-                        <span className="hidden sm:inline">•</span>
-                        <span>{doc.pages} pages</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 flex-wrap">
-                    {getStatusBadge(doc.status)}
-                    {getPriorityBadge(doc.priority)}
-                    <span className="text-xs sm:text-sm text-gray-400">{doc.size}</span>
-                    <div className="relative">
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setShowDropdown(showDropdown === doc.id ? null : doc.id)
-                        }}
-                        className="text-gray-400 hover:text-white p-2 rounded-lg hover:bg-gray-600/30 transition-all"
-                      >
-                        <MoreHorizontal className="w-4 h-4" />
-                      </button>
-                      {showDropdown === doc.id && (
-                        <div className="absolute right-0 top-10 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 min-w-[160px]">
-                          <button 
-                            onClick={() => handleDocumentAction('view', doc.id)}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 flex items-center gap-2 rounded-t-xl"
-                          >
-                            <Eye className="w-4 h-4" /> View
-                          </button>
-                          <button 
-                            onClick={() => handleDocumentAction('download', doc.id)}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 flex items-center gap-2"
-                          >
-                            <Download className="w-4 h-4" /> Download
-                          </button>
-                          <button 
-                            onClick={() => handleDocumentAction('edit', doc.id)}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 flex items-center gap-2"
-                          >
-                            <FileText className="w-4 h-4" /> Edit
-                          </button>
-                          <button 
-                            onClick={() => handleDocumentAction('delete', doc.id)}
-                            className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700 flex items-center gap-2 rounded-b-xl"
-                          >
-                            <Trash2 className="w-4 h-4" /> Delete
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              
-              {filteredDocuments.length === 0 && (
-                <div className="text-center py-12">
-                  <FileX className="w-16 h-16 text-gray-500 mx-auto mb-4" />
-                  <p className="text-gray-400 text-lg">No documents found</p>
-                  <p className="text-gray-500 text-sm">Try adjusting your filters or search term</p>
-                </div>
-              )}
-            </div>
-          </div>
+            </CardContent>
+          </Card>
+        </section>
 
-          {/* Activity Panel */}
-          <div className="space-y-4">
-            {/* Quick Stats */}
-            <div className="bg-gray-800/40 backdrop-blur-xl border border-gray-700/50 rounded-2xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-white">Today's Activity</h3>
-                <Activity className="w-5 h-5 text-blue-400" />
+        {/* === SIX REQUIRED SECTIONS === */}
+        <section className="space-y-8">
+          {/* 1) Current Batch (LIVE) */}
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle className="text-lg">Current Batch</CardTitle>
+              <span className="text-xs text-gray-400">Batches · Jobs · Scanning · Indexing · Quality · Re-*</span>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+                {currentBatch.map(({ label, value }) => (
+                  <MetricTile key={label} label={label} value={value} chart="area" />
+                ))}
               </div>
-              <div className="space-y-4">
-                <div 
-                  className="flex items-center justify-between p-3 rounded-xl bg-gray-700/30 hover:bg-gray-700/50 transition-all cursor-pointer"
-                  onClick={() => alert('Viewing upload details')}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-green-500/20 rounded-lg flex items-center justify-center">
-                      <Upload className="w-4 h-4 text-green-400" />
-                    </div>
-                    <span className="text-gray-300 text-sm">New Uploads</span>
-                  </div>
-                  <span className="text-green-400 font-semibold">+24</span>
-                </div>
-                
-                <div 
-                  className="flex items-center justify-between p-3 rounded-xl bg-gray-700/30 hover:bg-gray-700/50 transition-all cursor-pointer"
-                  onClick={() => alert('Viewing approval details')}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center">
-                      <CheckCircle className="w-4 h-4 text-blue-400" />
-                    </div>
-                    <span className="text-gray-300 text-sm">Approvals</span>
-                  </div>
-                  <span className="text-blue-400 font-semibold">+12</span>
-                </div>
-                
-                <div 
-                  className="flex items-center justify-between p-3 rounded-xl bg-gray-700/30 hover:bg-gray-700/50 transition-all cursor-pointer"
-                  onClick={() => alert('Viewing download statistics')}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-purple-500/20 rounded-lg flex items-center justify-center">
-                      <Download className="w-4 h-4 text-purple-400" />
-                    </div>
-                    <span className="text-gray-300 text-sm">Downloads</span>
-                  </div>
-                  <span className="text-purple-400 font-semibold">+156</span>
-                </div>
+              <div className="mt-4 text-right">
+                <Button variant="outline" onClick={go(VIEWS.CURRENT_BATCH)}>Open details</Button>
+              </div>
+            </CardContent>
+          </Card>
 
-                <div 
-                  className="flex items-center justify-between p-3 rounded-xl bg-gray-700/30 hover:bg-gray-700/50 transition-all cursor-pointer"
-                  onClick={() => alert('Viewing failed export details')}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-red-500/20 rounded-lg flex items-center justify-center">
-                      <XCircle className="w-4 h-4 text-red-400" />
+          {/* 2) Active Users (LIVE) */}
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle className="text-lg">Active Users</CardTitle>
+              <span className="text-xs text-cyan-300">Live</span>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {activeUsers.map(({ k, v }) => (
+                  <div key={k} className="rounded-xl border border-white/10 p-4 bg-white/5">
+                    <div className="text-xs text-gray-400">{k}</div>
+                    <div className="text-2xl font-semibold">{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-3 gap-4 mt-4">
+                {[
+                  { name: 'Scan', v: Math.min(100, 60 + (activeUsers[1]?.v % 40)) },
+                  { name: 'Index', v: Math.min(100, 50 + (activeUsers[2]?.v % 50)) },
+                  { name: 'Quality', v: Math.min(100, 70 + (activeUsers[3]?.v % 30)) },
+                ].map((p) => (
+                  <div key={p.name} className="p-3 rounded-xl border border-white/10 bg-white/5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span>{p.name}</span>
+                      <span className="font-medium">{p.v}%</span>
                     </div>
-                    <span className="text-gray-300 text-sm">Failed Exports</span>
+                    <div className="mt-2 h-2 rounded-full bg-white/10">
+                      <div className="h-2 rounded-full bg-white" style={{ width: `${p.v}%` }} />
+                    </div>
                   </div>
-                  <span className="text-red-400 font-semibold">+2</span>
-                </div>
+                ))}
               </div>
-            </div>
+              <div className="mt-4 text-right">
+                <Button variant="outline" onClick={go(VIEWS.ACTIVE_USERS)}>Open details</Button>
+              </div>
+            </CardContent>
+          </Card>
 
-            {/* System Alerts */}
-            <div className="bg-gray-800/40 backdrop-blur-xl border border-gray-700/50 rounded-2xl p-4 sm:p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-white">System Alerts</h3>
-                <button 
-                  onClick={() => alert('Viewing all system alerts')}
-                  className="text-blue-400 hover:text-blue-300 text-sm font-medium"
-                >
-                  View All
-                </button>
+          {/* 3) Productivity (LIVE) */}
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle className="text-lg">Productivity</CardTitle>
+              <TrendingUp className="w-4 h-4 text-gray-300" />
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+                {productivity.map((m) => (
+                  <MetricTile key={m.label} label={m.label} value={m.value} chart="none" />
+                ))}
               </div>
-              <div className="space-y-3">
-                <div 
-                  className="flex items-start gap-3 p-3 bg-red-500/10 border border-red-500/20 rounded-xl hover:bg-red-500/20 transition-all cursor-pointer"
-                  onClick={() => alert('Storage warning: 76% capacity reached. Consider archiving old documents.')}
-                >
-                  <div className="w-8 h-8 bg-red-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <AlertTriangle className="w-4 h-4 text-red-400" />
-                  </div>
-                  <div>
-                    <div className="text-red-300 text-sm font-medium">Storage Warning</div>
-                    <div className="text-red-400/80 text-xs mt-1">76% capacity reached</div>
-                  </div>
-                </div>
-                
-                <div 
-                  className="flex items-start gap-3 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-xl hover:bg-yellow-500/20 transition-all cursor-pointer"
-                  onClick={() => alert('45 documents are pending review. Click to view pending queue.')}
-                >
-                  <div className="w-8 h-8 bg-yellow-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Clock className="w-4 h-4 text-yellow-400" />
-                  </div>
-                  <div>
-                    <div className="text-yellow-300 text-sm font-medium">Pending Reviews</div>
-                    <div className="text-yellow-400/80 text-xs mt-1">45 documents awaiting</div>
-                  </div>
-                </div>
-                
-                <div 
-                  className="flex items-start gap-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl hover:bg-blue-500/20 transition-all cursor-pointer"
-                  onClick={() => alert('Security scan completed successfully. All systems are secure.')}
-                >
-                  <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Shield className="w-4 h-4 text-blue-400" />
-                  </div>
-                  <div>
-                    <div className="text-blue-300 text-sm font-medium">Security Scan</div>
-                    <div className="text-blue-400/80 text-xs mt-1">All systems secure</div>
-                  </div>
-                </div>
+              <div className="mt-4 h-36">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={trend12}>
+                    <Tooltip
+                      contentStyle={{
+                        background: '#111827',
+                        border: '1px solid #374151',
+                        borderRadius: 12,
+                        color: '#F9FAFB',
+                      }}
+                    />
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="x" />
+                    <YAxis />
+                    <Bar dataKey="y" />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
-            </div>
+              <div className="mt-4 text-right">
+                <Button variant="outline" onClick={go(VIEWS.PRODUCTIVITY)}>Open details</Button>
+              </div>
+            </CardContent>
+          </Card>
 
-            {/* Quick Actions */}
-            <div className="bg-gray-800/40 backdrop-blur-xl border border-gray-700/50 rounded-2xl p-4 sm:p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Quick Actions</h3>
-              <div className="space-y-3">
-                <button 
-                  onClick={() => alert('Opening bulk upload interface')}
-                  className="w-full flex items-center gap-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl hover:bg-blue-500/20 transition-all text-left"
-                >
-                  <Upload className="w-4 h-4 text-blue-400" />
-                  <span className="text-blue-300 text-sm font-medium">Bulk Upload</span>
-                </button>
-                
-                <button 
-                  onClick={() => alert('Opening approval queue')}
-                  className="w-full flex items-center gap-3 p-3 bg-green-500/10 border border-green-500/20 rounded-xl hover:bg-green-500/20 transition-all text-left"
-                >
-                  <CheckCircle className="w-4 h-4 text-green-400" />
-                  <span className="text-green-300 text-sm font-medium">Review Queue</span>
-                </button>
-                
-                <button 
-                  onClick={() => alert('Opening system settings')}
-                  className="w-full flex items-center gap-3 p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl hover:bg-purple-500/20 transition-all text-left"
-                >
-                  <Settings className="w-4 h-4 text-purple-400" />
-                  <span className="text-purple-300 text-sm font-medium">Settings</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+          {/* 4) Export Status — click to dedicated page */}
+          <Card
+  className="cursor-pointer hover:bg-white/5 transition"
+  onClick={go(VIEWS.EXPORT_STATUS)}
+>
+  <CardHeader className="flex items-center justify-between">
+    <CardTitle className="text-lg flex items-center gap-2">
+      <Table2 className="w-5 h-5" /> Export Status
+    </CardTitle>
 
-        {/* Footer */}
-        <div className="text-center text-gray-400 text-sm py-6 border-t border-gray-800/50">
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
-            <span>© 2025 Document Management System</span>
-            <span className="hidden sm:inline">•</span>
-            <span>Last updated: {currentTime.toLocaleString()}</span>
-            <span className="hidden sm:inline">•</span>
-            <button 
-              onClick={() => alert('System uptime: 99.8% | Server status: Healthy')}
-              className="text-green-400 hover:text-green-300 transition-colors"
-            >
-              System Status: Online
-            </button>
-          </div>
+    <div className="flex items-center gap-2">
+      <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs">
+        Succeeded
+      </span>
+      <span className="px-2 py-0.5 rounded bg-red-500/20 border border-red-500/30 text-red-300 text-xs">
+        Failed
+      </span>
+
+      {/* 👉 Explicit button */}
+      <Button size="sm" variant="outline" onClick={go(VIEWS.EXPORT_STATUS)}>
+        Open details
+      </Button>
+    </div>
+  </CardHeader>
+
+  <CardContent>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="rounded-xl border border-white/10 p-4 bg-white/5">
+        <div className="text-xs text-gray-400">Succeeded</div>
+        <div className="text-2xl font-semibold">
+          {dashboardData.exported}
         </div>
       </div>
 
-      {/* Click outside to close dropdown */}
-      {showDropdown && (
-        <div 
-          className="fixed inset-0 z-30" 
-          onClick={() => setShowDropdown(null)}
-        ></div>
-      )}
+      <div className="rounded-xl border border-white/10 p-4 bg-white/5">
+        <div className="text-xs text-gray-400">Failed</div>
+        <div className="text-2xl font-semibold">
+          {dashboardData.failedToExport}
+        </div>
+      </div>
+
+      <div className="col-span-2 h-28">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={trend12}>
+            <Tooltip
+              contentStyle={{
+                background: '#111827',
+                border: '1px solid #374151',
+                borderRadius: 12,
+                color: '#F9FAFB',
+              }}
+            />
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="x" />
+            <YAxis />
+            <Line type="monotone" dataKey="y" strokeWidth={2} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+
+    <p className="text-xs text-gray-400 mt-2">
+      Click to view detailed Job Details → Exported / Succeeded / In Queue / Failed
+    </p>
+  </CardContent>
+</Card>
+
+
+
+          {/* 5) User Activity */}
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle className="text-lg">User Activity</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {[
+                  { k: 'Active Users', v: activeUsers[0].v },
+                  { k: 'Inactive Users', v: 18 },
+                  { k: 'Disabled Users', v: 4 },
+                  { k: 'Total Users', v: 154 + (activeUsers[0].v - 138) },
+                ].map(({ k, v }) => (
+                  <div key={k} className="rounded-xl border border-white/10 p-4 bg-white/5">
+                    <div className="text-xs text-gray-400">{k}</div>
+                    <div className="text-2xl font-semibold">{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 text-right">
+                <Button variant="outline" onClick={go(VIEWS.USER_ACTIVITY)}>Open details</Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* 6) Batch Processing */}
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle className="text-lg">Batch Processing</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {['Total Jobs', 'Completed', 'Running', 'Failed'].map((k, i) => (
+                  <div key={k} className="rounded-xl border border-white/10 p-4 bg-white/5">
+                    <div className="text-xs text-gray-400">{k}</div>
+                    <div className="text-2xl font-semibold">{[
+                      dashboardData.batchJobsTotal,
+                      dashboardData.batchJobsCompleted,
+                      dashboardData.batchJobsRunning,
+                      dashboardData.batchJobsFailed,
+                    ][i]}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 h-36">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trend12}>
+                    <Tooltip
+                      contentStyle={{
+                        background: '#111827',
+                        border: '1px solid #374151',
+                        borderRadius: 12,
+                        color: '#F9FAFB',
+                      }}
+                    />
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="x" />
+                    <YAxis />
+                    <Line type="monotone" dataKey="y" strokeWidth={2} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="mt-4 text-right">
+                <Button variant="outline" onClick={go(VIEWS.BATCH_PROCESSING)}>Open details</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Deep-dive charts */}
+        <section className="grid grid-cols-1 xl:grid-cols-2 gap-8 my-10">
+          {/* Document Status Distribution */}
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle className="text-2xl">Document Status Distribution</CardTitle>
+              <Button onClick={() => alert('Viewing detailed document status breakdown with filtering options')}>View Details</Button>
+            </CardHeader>
+            <CardContent>
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={documentStatusData} cx="50%" cy="50%" innerRadius={60} outerRadius={120} paddingAngle={4} dataKey="value">
+                      {documentStatusData.map((d, i) => (
+                        <Cell key={i} fill={d.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        background: '#111827',
+                        border: '1px solid #374151',
+                        borderRadius: 12,
+                        color: '#F9FAFB',
+                      }}
+                    />
+                    <Legend wrapperStyle={{ paddingTop: '10px' }} iconType="circle" />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Department Performance */}
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle className="text-2xl">Department Performance</CardTitle>
+              <Button onClick={() => alert('Opening department analytics with performance metrics and comparisons')}>Analyze</Button>
+            </CardHeader>
+            <CardContent>
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={departmentData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                    <XAxis dataKey="name" stroke="#9CA3AF" fontSize={12} angle={-45} textAnchor="end" height={80} interval={0} />
+                    <YAxis stroke="#9CA3AF" fontSize={12} />
+                    <Tooltip
+                      contentStyle={{
+                        background: '#111827',
+                        border: '1px solid #374151',
+                        borderRadius: 12,
+                        color: '#F9FAFB',
+                      }}
+                    />
+                    <Legend />
+                    <Bar dataKey="uploads" name="Uploads" radius={[4, 4, 0, 0]} fill="#3B82F6" />
+                    <Bar dataKey="exports" name="Exports" radius={[4, 4, 0, 0]} fill="#10B981" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Monthly Trends */}
+        <section className="grid grid-cols-1 gap-8 my-10">
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle className="text-2xl">6-Month Performance Trends</CardTitle>
+              <div className="flex items-center gap-2">
+                <Button onClick={() => alert('Opening predictive analytics and trend forecasting')}>Forecast</Button>
+                <Button onClick={() => alert('Exporting trend data to CSV format')} variant="outline">Export Data</Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="h-96">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={monthlyTrendData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                    <XAxis dataKey="month" stroke="#9CA3AF" fontSize={12} />
+                    <YAxis stroke="#9CA3AF" fontSize={12} />
+                    <Tooltip
+                      contentStyle={{
+                        background: '#111827',
+                        border: '1px solid #374151',
+                        borderRadius: 12,
+                        color: '#F9FAFB',
+                      }}
+                    />
+                    <Legend />
+                    <Line type="monotone" dataKey="uploads" stroke="#3B82F6" strokeWidth={4} dot={{ r: 3 }} name="Document Uploads" />
+                    <Line type="monotone" dataKey="exports" stroke="#10B981" strokeWidth={4} dot={{ r: 3 }} name="Document Exports" />
+                    <Line type="monotone" dataKey="users" stroke="#F59E0B" strokeWidth={4} dot={{ r: 3 }} name="Active Users" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Weekly Activity + Storage & Performance */}
+        <section className="grid grid-cols-1 xl:grid-cols-2 gap-8 my-10">
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle className="text-2xl">Weekly Activity</CardTitle>
+              <Button onClick={() => alert('Opening weekly activity analysis with hourly breakdowns')}>Deep Dive</Button>
+            </CardHeader>
+            <CardContent>
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={weeklyActivityData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                    <XAxis dataKey="day" stroke="#9CA3AF" fontSize={12} />
+                    <YAxis stroke="#9CA3AF" fontSize={12} />
+                    <Tooltip
+                      contentStyle={{
+                        background: '#111827',
+                        border: '1px solid #374151',
+                        borderRadius: 12,
+                        color: '#F9FAFB',
+                      }}
+                    />
+                    <Legend />
+                    <Area type="monotone" dataKey="uploads" stackId="1" stroke="#3B82F6" fill="#3B82F6" fillOpacity={0.4} name="Uploads" />
+                    <Area type="monotone" dataKey="searches" stackId="2" stroke="#10B981" fill="#10B981" fillOpacity={0.4} name="Searches" />
+                    <Area type="monotone" dataKey="downloads" stackId="3" stroke="#F59E0B" fill="#F59E0B" fillOpacity={0.4} name="Downloads" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle className="text-2xl">Storage & Performance</CardTitle>
+              <Button onClick={() => alert('Opening system diagnostics and performance monitoring')}>Diagnostics</Button>
+            </CardHeader>
+            <CardContent>
+              <div className="mb-6">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-gray-300 font-medium">Storage Usage</span>
+                  <span className="text-white font-semibold">{dashboardData.storageUsed}TB / {dashboardData.storageTotal}TB</span>
+                </div>
+                <div className="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
+                  <div className="h-4 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full" style={{ width: `${(dashboardData.storageUsed / dashboardData.storageTotal) * 100}%` }} />
+                </div>
+                <div className="flex justify-between text-xs text-gray-400 mt-1"><span>0TB</span><span>{dashboardData.storageTotal}TB</span></div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+                  <div className="flex items-center gap-2 mb-2"><Activity className="w-4 h-4 text-green-400" /><span className="text-sm text-gray-300">System Uptime</span></div>
+                  <div className="text-2xl font-bold text-green-400">{dashboardData.systemUptime}%</div>
+                  <div className="text-xs text-gray-400">Last 30 days</div>
+                </div>
+                <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+                  <div className="flex items-center gap-2 mb-2"><Zap className="w-4 h-4 text-blue-400" /><span className="text-sm text-gray-300">Upload Speed</span></div>
+                  <div className="text-2xl font-bold text-blue-400">{dashboardData.avgUploadSpeed}MB/s</div>
+                  <div className="text-xs text-gray-400">Average</div>
+                </div>
+                <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+                  <div className="flex items-center gap-2 mb-2"><Search className="w-4 h-4 text-purple-400" /><span className="text-sm text-gray-300">Search Time</span></div>
+                  <div className="text-2xl font-bold text-purple-400">{dashboardData.avgSearchTime}s</div>
+                  <div className="text-xs text-gray-400">Average</div>
+                </div>
+                <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+                  <div className="flex items-center gap-2 mb-2"><Shield className="w-4 h-4 text-red-400" /><span className="text-sm text-gray-300">Security Incidents</span></div>
+                  <div className="text-2xl font-bold text-red-400">{dashboardData.securityViolations}</div>
+                  <div className="text-xs text-gray-400">Incidents</div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Footer */}
+        <footer className="text-center text-gray-400 text-sm py-8 border-t border-gray-800/50">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <span className="text-lg">© 2025 Document Management System</span>
+            <span className="hidden sm:inline text-gray-600">•</span>
+            <span>Last updated: {currentTime.toLocaleString()}</span>
+            <span className="hidden sm:inline text-gray-600">•</span>
+            <Button
+              onClick={() =>
+                alert(`System Health Report:
+
+• Uptime: 99.8%
+• Server Status: Healthy
+• Database: Online
+• Storage: Optimal
+• Network: Stable
+• Last Maintenance: 3 days ago`)
+              }
+              variant="outline"
+            >
+              System Status: Online
+            </Button>
+          </div>
+        </footer>
+      </div>
     </div>
   )
 }

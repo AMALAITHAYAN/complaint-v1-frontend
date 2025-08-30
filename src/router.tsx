@@ -10,7 +10,8 @@ import AdminLayout from '@/admin/layouts/AdminLayout'
 import AdminDashboard from '@/admin/pages/AdminDashboard'
 import DocumentTypesPage from '@/admin/pages/DocumentTypesPage'
 import DocumentTypesRestorePage from '@/admin/pages/DocumentTypesRestorePage'
-import BatchesPage from '@/admin/pages/BatchesPage' // ✅ Added
+import BatchesPage from '@/admin/pages/BatchesPage'
+import UsersAccessPage from '@/admin/pages/UsersAccessPage' // ✅ NEW
 
 import ScannerDashboard from '@/shared/pages/ScannerDashboard'
 import ReviewerDashboard from '@/shared/pages/ReviewerDashboard'
@@ -47,7 +48,7 @@ const adminRootRoute = createRoute({
 /** Admin children */
 const adminIndexRoute = createRoute({
   getParentRoute: () => adminRootRoute,
-  path: '/',              // /admin
+  path: '/', // /admin
   component: AdminDashboard,
 })
 
@@ -63,11 +64,17 @@ const adminDocTypesRestoreRoute = createRoute({
   component: DocumentTypesRestorePage,
 })
 
-// ✅ New route: /admin/batches
 const adminBatchesRoute = createRoute({
   getParentRoute: () => adminRootRoute,
   path: '/batches', // /admin/batches
   component: BatchesPage,
+})
+
+/** ✅ New: Users Access */
+const adminUsersAccessRoute = createRoute({
+  getParentRoute: () => adminRootRoute,
+  path: '/users-access', // /admin/users-access
+  component: UsersAccessPage,
 })
 
 /** Other role landing pages */
@@ -93,8 +100,9 @@ const routeTree = rootRoute.addChildren([
   adminRootRoute.addChildren([
     adminIndexRoute,
     adminDocTypesRoute,
-    adminDocTypesRestoreRoute, // <-- existing Restore tab
-    adminBatchesRoute,         // ✅ added Batches tab
+    adminDocTypesRestoreRoute,
+    adminBatchesRoute,
+    adminUsersAccessRoute, // ✅ added Users Access tab
   ]),
   scannerRoute,
   reviewerRoute,
